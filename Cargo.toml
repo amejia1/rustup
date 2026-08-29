@@ -59,7 +59,7 @@ futures-util = "0.3.31"
 git-testament = "0.2"
 home = "0.5.4"
 http-body-util = "0.1.0"
-hyper = { version = "1.0", default-features = false, features = ["server", "http1"] }
+hyper = { version = "1.0", default-features = false, features = ["client", "http1", "server"] }
 hyper-util = { version = "0.1.1", features = ["tokio"] }
 indicatif = "0.18"
 itertools = "0.15"
@@ -76,6 +76,7 @@ platforms = "4"
 pulldown-cmark = { version = "0.13", default-features = false }
 rand = "0.10"
 rayon = "1.10.0"
+base64 = "0.22"
 regex = "1"
 remove_dir_all = { version = "1.0.0", features = ["parallel"] }
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "gzip", "http2", "socks", "stream"], optional = true }
@@ -93,7 +94,7 @@ tar = "0.4.26"
 tempfile = "3.8"
 thiserror = "2"
 threadpool = "1"
-tokio = { version = "1.26.0", default-features = false, features = ["macros", "rt-multi-thread", "sync"] }
+tokio = { version = "1.26.0", default-features = false, features = ["macros", "rt-multi-thread", "signal", "sync"] }
 tokio-retry = "0.3.0"
 tokio-stream = "0.1.14"
 toml = "1.0"
@@ -177,3 +178,13 @@ opt-level = 0
 [package.metadata.cargo-all-features]
 # Building with no web backend will error.
 always_include_features = ["reqwest-rustls-tls"]
+
+[[bin]]
+name = "rustup-mock-server"
+path = "src/bin/rustup-mock-server.rs"
+required-features = ["test"]
+
+[[bin]]
+name = "rustup-mock-proxy"
+path = "src/bin/rustup-mock-proxy.rs"
+required-features = ["test"]

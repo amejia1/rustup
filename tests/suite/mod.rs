@@ -11,4 +11,5 @@ mod cli_v1;
 mod cli_v2;
 mod dist_install;
 mod known_target_tuples;
+mod proxy;
 mod static_roots;

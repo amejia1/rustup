@@ -15,6 +15,220 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use tempfile::TempDir;
 
+pub fn tmp_dir() -> TempDir {
+    tempfile::Builder::new()
+        .prefix("rustup-download-test-")
+        .tempdir()
+        .expect("creating tempdir for test")
+}
+
+pub fn write_file(path: &Path, contents: &str) {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .truncate(true)
+        .create(true)
+        .open(path)
+        .expect("writing test data");
+
+    io::Write::write_all(&mut file, contents.as_bytes()).expect("writing test data");
+
+    file.sync_data().expect("writing test data");
+}
+
+// A dead simple hyper server implementation.
+// For more info, see:
+// https://hyper.rs/guides/1/server/hello-world/
+async fn run_server(
+    addr_tx: Sender<SocketAddr>,
+    addr: SocketAddr,
+    contents: Vec<u8>,
+    honor_range: bool,
+) {
+    let svc = service_fn(move |req: Request<hyper::body::Incoming>| {
+        let contents = contents.clone();
+        async move {
+            let res = serve_contents(req, contents, honor_range);
+            Ok::<_, Infallible>(res)
+        }
+    });
+
+    let listener = tokio::net::TcpListener::bind(&addr)
+        .await
+        .expect("can not bind");
+
+    let addr = listener.local_addr().unwrap();
+    addr_tx.send(addr).unwrap();
+
+    loop {
+        let (stream, _) = listener
+            .accept()
+            .await
+            .expect("could not accept connection");
+        let io = hyper_util::rt::TokioIo::new(stream);
+
+        let svc = svc.clone();
+        tokio::spawn(async move {
+            if let Err(err) = http1::Builder::new().serve_connection(io, svc).await {
+                eprintln!("failed to serve connection: {err:?}");
+            }
+        });
+    }
+}
+
+pub fn serve_file(contents: Vec<u8>, honor_range: bool) -> SocketAddr {
+    let addr: SocketAddr = ([127, 0, 0, 1], 0).into();
+    let (addr_tx, addr_rx) = channel();
+
+    thread::spawn(move || {
+        let server = run_server(addr_tx, addr, contents, honor_range);
+        let rt = tokio::runtime::Runtime::new().expect("could not creating Runtime");
+        rt.block_on(server);
+    });
+
+    let addr = addr_rx.recv();
+    addr.unwrap()
+}
+
+fn serve_contents(
+    req: Request<hyper::body::Incoming>,
+    contents: Vec<u8>,
+    honor_range: bool,
+) -> hyper::Response<Full<Bytes>> {
+    let mut range_header = None;
+    let (status, body) = if honor_range && let Some(range) = req.headers().get(hyper::header::RANGE)
+    {
+        // extract range "bytes={start}-"
+        let range = range.to_str().expect("unexpected Range header");
+        assert!(range.starts_with("bytes="));
+        let range = range.trim_start_matches("bytes=");
+        assert!(range.ends_with('-'));
+        let range = range.trim_end_matches('-');
+        assert_eq!(range.split('-').count(), 1);
+        let start: u64 = range.parse().expect("unexpected Range header");
+
+        range_header = Some(format!("bytes {}-{len}/{len}", start, len = contents.len()));
+        (
+            hyper::StatusCode::PARTIAL_CONTENT,
+            contents[start as usize..].to_vec(),
+        )
+    } else {
+        (hyper::StatusCode::OK, contents)
+    };
+
+    let mut res = hyper::Response::builder()
+        .status(status)
+        .header(hyper::header::CONTENT_LENGTH, body.len())
+        .body(Full::new(Bytes::from(body)))
+        .unwrap();
+    if let Some(range) = range_header {
+        res.headers_mut()
+            .insert(hyper::header::CONTENT_RANGE, range.parse().unwrap());
+    }
+    res
+}
+
+/// Clear proxy-related environment variables
+///
+/// Every test using a proxy-sensitive URL should call this and hold the returned guard,
+/// regardless of whether the test is going to set its own proxy environment variables.
+async fn scrub_env() -> tokio::sync::MutexGuard<'static, ()> {
+    static SERIALISE_TESTS: LazyLock<tokio::sync::Mutex<()>> =
+        LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+    let guard = SERIALISE_TESTS.lock().await;
+
+    // SAFETY: We are clearing environment variables when `SERIALISE_TESTS` is locked, and those
+    // environment variables in question are only relevant in tests that continue to hold this
+    // mutex guard.
+    unsafe {
+        remove_var("http_proxy");
+        remove_var("HTTP_PROXY");
+        remove_var("https_proxy");
+        remove_var("HTTPS_PROXY");
+        remove_var("ftp_proxy");
+        remove_var("FTP_PROXY");
+        remove_var("all_proxy");
+        remove_var("ALL_PROXY");
+        remove_var("no_proxy");
+        remove_var("NO_PROXY");
+    }
+
+    guard
+}
+
+/// A server that verifies the given request headers match the expected values.
+fn serve_file_with_header_verification(headers: Vec<(&str, &str)>) -> SocketAddr {
+    let addr: SocketAddr = ([127, 0, 0, 1], 0).into();
+    let (addr_tx, addr_rx) = channel();
+    let headers: Vec<(String, String)> = headers
+        .into_iter()
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect();
+
+    thread::spawn(move || {
+        let contents = b"test content for header verification".to_vec();
+
+        let svc = service_fn(move |req: Request<hyper::body::Incoming>| {
+            let contents = contents.clone();
+            let headers = headers.clone();
+            async move {
+                let res = serve_contents_with_header_verification(req, contents, &headers);
+                Ok::<_, Infallible>(res)
+            }
+        });
+
+        let rt = tokio::runtime::Runtime::new().expect("could not create Runtime");
+        rt.block_on(async {
+            let listener = tokio::net::TcpListener::bind(addr)
+                .await
+                .expect("can not bind");
+            let local_addr = listener.local_addr().unwrap();
+            addr_tx.send(local_addr).unwrap();
+
+            loop {
+                let (stream, _) = listener
+                    .accept()
+                    .await
+                    .expect("could not accept connection");
+                let io = hyper_util::rt::TokioIo::new(stream);
+                let svc_ref = svc.clone();
+
+                if let Err(err) = http1::Builder::new().serve_connection(io, svc_ref).await {
+                    eprintln!("failed to serve connection: {err:?}");
+                }
+            }
+        });
+    });
+
+    addr_rx.recv().unwrap()
+}
+
+fn serve_contents_with_header_verification(
+    req: Request<hyper::body::Incoming>,
+    contents: Vec<u8>,
+    headers: &[(String, String)],
+) -> hyper::Response<Full<Bytes>> {
+    // Verify all headers are present and have the expected values
+    for (header_name, expected_value) in headers {
+        let actual_value = req
+            .headers()
+            .get(header_name.as_str())
+            .map(|v| v.to_str().unwrap_or(""));
+        if actual_value != Some(expected_value.as_str()) {
+            return hyper::Response::builder()
+                .status(hyper::StatusCode::UNAUTHORIZED)
+                .body(Full::new(Bytes::from("Unauthorized")))
+                .unwrap();
+        }
+    }
+
+    hyper::Response::builder()
+        .status(hyper::StatusCode::OK)
+        .header(hyper::header::CONTENT_LENGTH, contents.len())
+        .body(Full::new(Bytes::from(contents)))
+        .unwrap()
+}
+
 #[cfg(any(feature = "reqwest-rustls-tls", feature = "reqwest-native-tls"))]
 mod reqwest {
     use std::env::set_var;
@@ -28,12 +242,14 @@ mod reqwest {
     use reqwest::{Client, Proxy};
     use url::Url;
 
-    use super::{scrub_env, serve_file, tmp_dir, write_file};
+    use super::{scrub_env, serve_file, serve_file_with_header_verification, tmp_dir, write_file};
     use crate::download::{DownloadOptions, Tls};
 
     const OPTIONS: DownloadOptions = DownloadOptions {
         tls: DOWNLOAD_BACKEND,
         timeout: Duration::from_secs(180),
+        authorization_header: None,
+        proxy_authorization_header: None,
     };
 
     #[cfg(feature = "reqwest-rustls-tls")]
@@ -158,6 +374,8 @@ mod reqwest {
         DownloadOptions {
             tls: DOWNLOAD_BACKEND,
             timeout: Duration::from_secs(1),
+            authorization_header: None,
+            proxy_authorization_header: None,
         }
         .start(&from_url, &target_path)
         .with_resume()
@@ -168,145 +386,132 @@ mod reqwest {
         assert!(target_path.exists(), "partial file should not be deleted");
         assert_eq!(std::fs::read_to_string(&target_path).unwrap(), "123");
     }
-}
 
-pub fn tmp_dir() -> TempDir {
-    tempfile::Builder::new()
-        .prefix("rustup-download-test-")
-        .tempdir()
-        .expect("creating tempdir for test")
-}
+    #[tokio::test]
+    async fn authorization_header() {
+        let _guard = scrub_env().await;
+        let tmpdir = tmp_dir();
+        let target_path = tmpdir.path().join("downloaded");
 
-pub fn write_file(path: &Path, contents: &str) {
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .truncate(true)
-        .create(true)
-        .open(path)
-        .expect("writing test data");
+        // Bearer token: ghp_1234567890abcdef is a typical format for GitHub Personal Access Tokens,
+        // which are commonly used as Bearer tokens in CI/CD environments.
+        let bearer_token = "Bearer ghp_1234567890abcdef";
+        let addr = serve_file_with_header_verification(vec![("Authorization", bearer_token)]);
+        let from_url = format!("http://{addr}").parse().unwrap();
 
-    io::Write::write_all(&mut file, contents.as_bytes()).expect("writing test data");
+        let options = DownloadOptions {
+            tls: DOWNLOAD_BACKEND,
+            timeout: Duration::from_secs(180),
+            authorization_header: Some(bearer_token.to_string()),
+            proxy_authorization_header: None,
+        };
 
-    file.sync_data().expect("writing test data");
-}
-
-// A dead simple hyper server implementation.
-// For more info, see:
-// https://hyper.rs/guides/1/server/hello-world/
-async fn run_server(
-    addr_tx: Sender<SocketAddr>,
-    addr: SocketAddr,
-    contents: Vec<u8>,
-    honor_range: bool,
-) {
-    let svc = service_fn(move |req: Request<hyper::body::Incoming>| {
-        let contents = contents.clone();
-        async move {
-            let res = serve_contents(req, contents, honor_range);
-            Ok::<_, Infallible>(res)
-        }
-    });
-
-    let listener = tokio::net::TcpListener::bind(&addr)
-        .await
-        .expect("can not bind");
-
-    let addr = listener.local_addr().unwrap();
-    addr_tx.send(addr).unwrap();
-
-    loop {
-        let (stream, _) = listener
-            .accept()
+        options
+            .start(&from_url, &target_path)
+            .download()
             .await
-            .expect("could not accept connection");
-        let io = hyper_util::rt::TokioIo::new(stream);
+            .expect("Test download failed");
 
-        let svc = svc.clone();
-        tokio::spawn(async move {
-            if let Err(err) = http1::Builder::new().serve_connection(io, svc).await {
-                eprintln!("failed to serve connection: {err:?}");
-            }
-        });
-    }
-}
-
-pub fn serve_file(contents: Vec<u8>, honor_range: bool) -> SocketAddr {
-    let addr = ([127, 0, 0, 1], 0).into();
-    let (addr_tx, addr_rx) = channel();
-
-    thread::spawn(move || {
-        let server = run_server(addr_tx, addr, contents, honor_range);
-        let rt = tokio::runtime::Runtime::new().expect("could not creating Runtime");
-        rt.block_on(server);
-    });
-
-    let addr = addr_rx.recv();
-    addr.unwrap()
-}
-
-fn serve_contents(
-    req: Request<hyper::body::Incoming>,
-    contents: Vec<u8>,
-    honor_range: bool,
-) -> hyper::Response<Full<Bytes>> {
-    let mut range_header = None;
-    let (status, body) = if honor_range && let Some(range) = req.headers().get(hyper::header::RANGE)
-    {
-        // extract range "bytes={start}-"
-        let range = range.to_str().expect("unexpected Range header");
-        assert!(range.starts_with("bytes="));
-        let range = range.trim_start_matches("bytes=");
-        assert!(range.ends_with('-'));
-        let range = range.trim_end_matches('-');
-        assert_eq!(range.split('-').count(), 1);
-        let start: u64 = range.parse().expect("unexpected Range header");
-
-        range_header = Some(format!("bytes {}-{len}/{len}", start, len = contents.len()));
-        (
-            hyper::StatusCode::PARTIAL_CONTENT,
-            contents[start as usize..].to_vec(),
-        )
-    } else {
-        (hyper::StatusCode::OK, contents)
-    };
-
-    let mut res = hyper::Response::builder()
-        .status(status)
-        .header(hyper::header::CONTENT_LENGTH, body.len())
-        .body(Full::new(Bytes::from(body)))
-        .unwrap();
-    if let Some(range) = range_header {
-        res.headers_mut()
-            .insert(hyper::header::CONTENT_RANGE, range.parse().unwrap());
-    }
-    res
-}
-
-/// Clear proxy-related environment variables
-///
-/// Every test using a proxy-sensitive URL should call this and hold the returned guard,
-/// regardless of whether the test is going to set its own proxy environment variables.
-async fn scrub_env() -> tokio::sync::MutexGuard<'static, ()> {
-    static SERIALISE_TESTS: LazyLock<tokio::sync::Mutex<()>> =
-        LazyLock::new(|| tokio::sync::Mutex::new(()));
-
-    let guard = SERIALISE_TESTS.lock().await;
-
-    // SAFETY: We are clearing environment variables when `SERIALISE_TESTS` is locked, and those
-    // environment variables in question are only relevant in tests that continue to hold this
-    // mutex guard.
-    unsafe {
-        remove_var("http_proxy");
-        remove_var("HTTP_PROXY");
-        remove_var("https_proxy");
-        remove_var("HTTPS_PROXY");
-        remove_var("ftp_proxy");
-        remove_var("FTP_PROXY");
-        remove_var("all_proxy");
-        remove_var("ALL_PROXY");
-        remove_var("no_proxy");
-        remove_var("NO_PROXY");
+        assert!(target_path.exists());
+        assert_eq!(
+            std::fs::read_to_string(&target_path).unwrap().trim(),
+            "test content for header verification"
+        );
     }
 
-    guard
+    #[tokio::test]
+    async fn proxy_authorization_header() {
+        let _guard = scrub_env().await;
+        let tmpdir = tmp_dir();
+        let target_path = tmpdir.path().join("downloaded");
+
+        // Basic auth value for username 'test' and password '123?45>6':
+        // Shell command: echo -n 'test:123?45>6' | base64
+        // Result: dGVzdDoxMjM/NDU+Ng==
+        // The password contains special characters that are common in passwords (? and >).
+        let basic_auth = "Basic dGVzdDoxMjM/NDU+Ng==";
+        let addr = serve_file_with_header_verification(vec![("Proxy-Authorization", basic_auth)]);
+        let from_url = format!("http://{addr}").parse().unwrap();
+
+        let options = DownloadOptions {
+            tls: DOWNLOAD_BACKEND,
+            timeout: Duration::from_secs(180),
+            authorization_header: None,
+            proxy_authorization_header: Some(basic_auth.to_string()),
+        };
+
+        options
+            .start(&from_url, &target_path)
+            .download()
+            .await
+            .expect("Test download failed");
+
+        assert!(target_path.exists());
+        assert_eq!(
+            std::fs::read_to_string(&target_path).unwrap().trim(),
+            "test content for header verification"
+        );
+    }
+
+    #[tokio::test]
+    async fn both_authorization_headers() {
+        let _guard = scrub_env().await;
+        let tmpdir = tmp_dir();
+        let target_path = tmpdir.path().join("downloaded");
+
+        // Both Authorization and Proxy-Authorization headers
+        let addr = serve_file_with_header_verification(vec![
+            ("Authorization", "Bearer combined-token"),
+            ("Proxy-Authorization", "Basic dGVzdDoxMjM/NDU+Ng=="),
+        ]);
+        let from_url = format!("http://{addr}").parse().unwrap();
+
+        let options = DownloadOptions {
+            tls: DOWNLOAD_BACKEND,
+            timeout: Duration::from_secs(180),
+            authorization_header: Some("Bearer combined-token".to_string()),
+            proxy_authorization_header: Some("Basic dGVzdDoxMjM/NDU+Ng==".to_string()),
+        };
+
+        options
+            .start(&from_url, &target_path)
+            .download()
+            .await
+            .expect("Test download failed");
+
+        assert!(target_path.exists());
+        assert_eq!(
+            std::fs::read_to_string(&target_path).unwrap().trim(),
+            "test content for header verification"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_authorization_headers() {
+        let _guard = scrub_env().await;
+        let tmpdir = tmp_dir();
+        let target_path = tmpdir.path().join("downloaded");
+        // Use the standard serve_file which doesn't check for any headers
+        let addr = serve_file(b"test content for no headers".to_vec(), false);
+        let from_url = format!("http://{addr}").parse().unwrap();
+
+        let options = DownloadOptions {
+            tls: DOWNLOAD_BACKEND,
+            timeout: Duration::from_secs(180),
+            authorization_header: None,
+            proxy_authorization_header: None,
+        };
+
+        options
+            .start(&from_url, &target_path)
+            .download()
+            .await
+            .expect("Test download failed");
+
+        assert!(target_path.exists());
+        assert_eq!(
+            std::fs::read_to_string(&target_path).unwrap().trim(),
+            "test content for no headers"
+        );
+    }
 }
