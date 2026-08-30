@@ -71,6 +71,7 @@ opener = "0.8.0"
 # `openssl` is used by the `reqwest` backend although it isn't imported by
 # rustup: this allows controlling the vendoring status without exposing the
 # presence of the download crate.
+base64 = "0.22"
 openssl = { version = "0.10", optional = true }
 opentelemetry = { version = "0.32", optional = true }
 opentelemetry-otlp = { version = "0.32", features = ["grpc-tonic"], optional = true }
@@ -79,7 +80,6 @@ platforms = "4"
 pulldown-cmark = { version = "0.13", default-features = false }
 rand = "0.10"
 rayon = "1.10.0"
-base64 = "0.22"
 regex = "1"
 remove_dir_all = { version = "1.0.0", features = ["parallel"] }
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "gzip", "http2", "socks", "stream"], optional = true }
