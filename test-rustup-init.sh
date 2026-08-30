@@ -191,17 +191,16 @@ rustup_init_test() {
     # The env prefix avoids leaking RUSTUP_HOME/CARGO_HOME/http_proxy into
     # later tests; an empty http_proxy disables proxying.
     #
-    # Provide non-interactive input to rustup-init and suppress logs: we pipe
-    # "1" to rustup-init to automatically accept the installation prompt,
-    # because rustup-init normally prompts for user input but in automated
-    # testing we need to provide the input programmatically.
+    # -y answers every prompt, including the one Windows shows after a
+    # successful install ("Press the Enter key to continue"); it is the
+    # same unattended invocation the other rustup-init tests use.
     # RUSTUP_INIT_SKIP_PATH_CHECK avoids a spurious "existing Rust" prompt
     # when the machine has a non-rustup Rust on PATH (e.g. CI images ship
     # one at /rustc-sysroot/bin); see src/test/clitools.rs.
-    if echo "1" | env http_proxy="$proxy" https_proxy="$proxy" \
+    if env http_proxy="$proxy" https_proxy="$proxy" \
         RUSTUP_HOME="$TEST_RUSTUP_HOME" CARGO_HOME="$TEST_RUSTUP_HOME" \
         RUSTUP_INIT_SKIP_PATH_CHECK=yes \
-        ./target/debug/rustup-init --no-modify-path 2>/dev/null; then
+        ./target/debug/rustup-init --no-modify-path -y 2>/dev/null; then
         # Check if rustup was installed
         if [ -f "$TEST_RUSTUP_HOME/bin/rustup" ]; then
             echo "Test ${number} PASSED - rustup-init completed and set up rustup"

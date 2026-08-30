@@ -286,6 +286,7 @@ fn run_rustup_init(extra_env: &[(&str, &str)]) -> anyhow::Result<(tempfile::Temp
     let home = tempfile::Builder::new().prefix("rustup-home-").tempdir()?;
 
     let mut cmd = Command::new(RUSTUP_INIT);
+    cmd.arg("-y");
     cmd.arg("--no-modify-path");
     for var in [
         "http_proxy",
@@ -318,17 +319,15 @@ fn run_rustup_init(extra_env: &[(&str, &str)]) -> anyhow::Result<(tempfile::Temp
         cmd.env(key, value);
     }
 
-    let mut child = cmd
-        .stdin(Stdio::piped())
+    // `-y` answers every prompt, including the one Windows shows after a
+    // successful install ("Press the Enter key to continue"). It is the
+    // same unattended invocation the other rustup-init tests use (e.g.
+    // tests/suite/cli_exact.rs).
+    let output = cmd
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()?;
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin is piped")
-        .write_all(b"1\n")?;
-    let output = child.wait_with_output()?;
+        .output()?;
     Ok((home, output))
 }
 
