@@ -2,6 +2,9 @@
 name = "rustup"
 version = "1.30.0"
 edition = "2024"
+# `cargo run` without `--bin` runs the main binary, as it did before the
+# `rustup-mock-server` and `rustup-mock-proxy` binaries were added.
+default-run = "rustup-init"
 license = "MIT OR Apache-2.0"
 description = "Manage multiple rust installations with ease"
 homepage = "https://github.com/rust-lang/rustup"
