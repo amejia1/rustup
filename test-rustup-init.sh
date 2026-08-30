@@ -195,8 +195,12 @@ rustup_init_test() {
     # "1" to rustup-init to automatically accept the installation prompt,
     # because rustup-init normally prompts for user input but in automated
     # testing we need to provide the input programmatically.
+    # RUSTUP_INIT_SKIP_PATH_CHECK avoids a spurious "existing Rust" prompt
+    # when the machine has a non-rustup Rust on PATH (e.g. CI images ship
+    # one at /rustc-sysroot/bin); see src/test/clitools.rs.
     if echo "1" | env http_proxy="$proxy" https_proxy="$proxy" \
         RUSTUP_HOME="$TEST_RUSTUP_HOME" CARGO_HOME="$TEST_RUSTUP_HOME" \
+        RUSTUP_INIT_SKIP_PATH_CHECK=yes \
         ./target/debug/rustup-init --no-modify-path 2>/dev/null; then
         # Check if rustup was installed
         if [ -f "$TEST_RUSTUP_HOME/bin/rustup" ]; then

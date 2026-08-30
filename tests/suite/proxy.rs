@@ -305,6 +305,11 @@ fn run_rustup_init(extra_env: &[(&str, &str)]) -> anyhow::Result<(tempfile::Temp
     }
     cmd.env("RUSTUP_HOME", home.path());
     cmd.env("CARGO_HOME", home.path());
+    // The test environment may have a real (non-rustup) Rust on PATH (the CI
+    // build images ship one at /rustc-sysroot/bin), which would make
+    // rustup-init prompt and abort. Skip the check, as the clitools test
+    // infrastructure does (src/test/clitools.rs).
+    cmd.env("RUSTUP_INIT_SKIP_PATH_CHECK", "yes");
     for (key, value) in extra_env {
         cmd.env(key, value);
     }
