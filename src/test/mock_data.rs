@@ -34,8 +34,15 @@ impl MockDataFile {
     /// `${HOME}/.local/share/<name>.data`, falling back to the system
     /// temporary directory when `HOME` is not set.
     pub fn default_path(name: &str) -> PathBuf {
-        match env::var_os("HOME") {
-            Some(home) => Path::new(&home)
+        let home = env::var_os("HOME").map(PathBuf::from);
+        Self::default_path_at(home.as_deref(), name)
+    }
+
+    /// The default data file location when `HOME` is `home` (or the system
+    /// temporary directory when `home` is `None`).
+    fn default_path_at(home: Option<&Path>, name: &str) -> PathBuf {
+        match home {
+            Some(home) => home
                 .join(".local")
                 .join("share")
                 .join(format!("{name}.data")),
@@ -180,15 +187,24 @@ mod tests {
 
     #[test]
     fn default_path_lives_under_local_share() {
-        let path = MockDataFile::default_path("rustup-mock-server");
-        let file_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("");
-        assert_eq!(file_name, "rustup-mock-server.data");
-        assert!(
-            path.to_string_lossy()
-                .ends_with(".local/share/rustup-mock-server.data")
+        let path =
+            MockDataFile::default_path_at(Some(Path::new("/home/tester")), "rustup-mock-server");
+
+        // Compare the final components rather than a rendered string, so the
+        // assertion holds on every platform (path separators differ).
+        let mut components = path.components().rev().take(3).collect::<Vec<_>>();
+        components.reverse();
+        let names = components
+            .iter()
+            .map(|component| component.as_os_str().to_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(names, [".local", "share", "rustup-mock-server.data"]);
+
+        // Without `HOME` the file lives directly in the temporary directory.
+        let path = MockDataFile::default_path_at(None, "rustup-mock-proxy");
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("rustup-mock-proxy.data")
         );
     }
 }
