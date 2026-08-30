@@ -39,7 +39,8 @@ struct Opt {
     basic_test_credential: Option<String>,
 
     /// Where to write the data file (default:
-    /// ${HOME}/.local/share/rustup-mock-proxy.data)
+    /// ${HOME}/.local/share/rustup-mock-proxy.data on Unix,
+    /// %LOCALAPPDATA%\rustup-mock-proxy.data on Windows)
     #[arg(long)]
     data_file: Option<PathBuf>,
 }

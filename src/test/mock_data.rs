@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::env;
+use std::ffi::OsStr;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -30,24 +31,58 @@ pub struct MockDataFile {
 }
 
 impl MockDataFile {
-    /// The default data file location for a mock program:
-    /// `${HOME}/.local/share/<name>.data`, falling back to the system
-    /// temporary directory when `HOME` is not set.
+    /// The default data file location for a mock program.
+    ///
+    /// On Unix this is `${HOME}/.local/share/<name>.data`, falling back to
+    /// the system temporary directory when `HOME` is not set. On Windows it
+    /// is `%LOCALAPPDATA%\<name>.data`, falling back to
+    /// `C:\Users\%USER%\AppData\Local` and then to the system temporary
+    /// directory.
     pub fn default_path(name: &str) -> PathBuf {
-        let home = env::var_os("HOME").map(PathBuf::from);
-        Self::default_path_at(home.as_deref(), name)
+        Self::default_dir().join(format!("{name}.data"))
     }
 
-    /// The default data file location when `HOME` is `home` (or the system
-    /// temporary directory when `home` is `None`).
-    fn default_path_at(home: Option<&Path>, name: &str) -> PathBuf {
-        match home {
-            Some(home) => home
-                .join(".local")
-                .join("share")
-                .join(format!("{name}.data")),
-            None => env::temp_dir().join(format!("{name}.data")),
+    /// The directory data files are created in by default.
+    fn default_dir() -> PathBuf {
+        #[cfg(not(windows))]
+        {
+            Self::unix_default_dir(env::var_os("HOME").as_deref())
         }
+
+        #[cfg(windows)]
+        {
+            Self::windows_default_dir(
+                env::var_os("LOCALAPPDATA").as_deref(),
+                env::var_os("USER").as_deref(),
+            )
+        }
+    }
+
+    /// The Unix default data directory: `${HOME}/.local/share`, or the
+    /// system temporary directory when `HOME` is not set.
+    #[cfg_attr(windows, allow(dead_code))]
+    fn unix_default_dir(home: Option<&OsStr>) -> PathBuf {
+        match home {
+            Some(home) => Path::new(home).join(".local").join("share"),
+            None => env::temp_dir(),
+        }
+    }
+
+    /// The Windows default data directory: `LOCALAPPDATA`, falling back to
+    /// `C:\Users\${USER}\AppData\Local` and then to the system temporary
+    /// directory.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    fn windows_default_dir(localappdata: Option<&OsStr>, user: Option<&OsStr>) -> PathBuf {
+        if let Some(localappdata) = localappdata {
+            return PathBuf::from(localappdata);
+        }
+        if let Some(user) = user {
+            return Path::new(r"C:\Users")
+                .join(user)
+                .join("AppData")
+                .join("Local");
+        }
+        env::temp_dir()
     }
 
     /// Atomically writes the data file for a listening process, replacing any
@@ -186,25 +221,60 @@ mod tests {
     }
 
     #[test]
-    fn default_path_lives_under_local_share() {
-        let path =
-            MockDataFile::default_path_at(Some(Path::new("/home/tester")), "rustup-mock-server");
+    fn default_path_uses_platform_default_dir() {
+        let dir = MockDataFile::default_dir();
+        let path = MockDataFile::default_path("rustup-mock-server");
+        assert_eq!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("rustup-mock-server.data")
+        );
+        assert_eq!(path.parent(), Some(dir.as_path()));
+    }
+
+    #[test]
+    fn unix_default_dir_lives_under_local_share() {
+        let dir = MockDataFile::unix_default_dir(Some(OsStr::new("/home/tester")));
 
         // Compare the final components rather than a rendered string, so the
         // assertion holds on every platform (path separators differ).
-        let mut components = path.components().rev().take(3).collect::<Vec<_>>();
+        let mut components = dir.components().rev().take(2).collect::<Vec<_>>();
         components.reverse();
         let names = components
             .iter()
             .map(|component| component.as_os_str().to_str().unwrap())
             .collect::<Vec<_>>();
-        assert_eq!(names, [".local", "share", "rustup-mock-server.data"]);
+        assert_eq!(names, [".local", "share"]);
 
-        // Without `HOME` the file lives directly in the temporary directory.
-        let path = MockDataFile::default_path_at(None, "rustup-mock-proxy");
+        // Without `HOME` the directory is the system temporary directory.
+        assert_eq!(MockDataFile::unix_default_dir(None), env::temp_dir());
+    }
+
+    #[test]
+    fn windows_default_dir_uses_localappdata() {
+        // `LOCALAPPDATA` is used as-is when set.
         assert_eq!(
-            path.file_name().and_then(|name| name.to_str()),
-            Some("rustup-mock-proxy.data")
+            MockDataFile::windows_default_dir(
+                Some(OsStr::new(r"C:\Users\tester\AppData\Local")),
+                None
+            ),
+            PathBuf::from(r"C:\Users\tester\AppData\Local")
+        );
+
+        // Without `LOCALAPPDATA` the directory is built from `USER`.
+        let dir = MockDataFile::windows_default_dir(None, Some(OsStr::new("tester")));
+        assert!(dir.to_string_lossy().contains(r"C:\Users"));
+        let mut components = dir.components().rev().take(3).collect::<Vec<_>>();
+        components.reverse();
+        let names = components
+            .iter()
+            .map(|component| component.as_os_str().to_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["tester", "AppData", "Local"]);
+
+        // Without either variable the system temporary directory is used.
+        assert_eq!(
+            MockDataFile::windows_default_dir(None, None),
+            env::temp_dir()
         );
     }
 }

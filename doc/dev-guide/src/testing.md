@@ -76,7 +76,9 @@ The file contains one `key=value` pair per line:
 The location of the data file is set with the `--data-file` option. When it
 is not given, the default locations are
 `${HOME}/.local/share/rustup-mock-server.data` and
-`${HOME}/.local/share/rustup-mock-proxy.data` respectively.
+`${HOME}/.local/share/rustup-mock-proxy.data` on Unix, and
+`%LOCALAPPDATA%\rustup-mock-server.data` and
+`%LOCALAPPDATA%\rustup-mock-proxy.data` on Windows.
 
 A shell one-liner to read the port from a data file:
 
@@ -121,7 +123,7 @@ Basic usage:
 | `--port <PORT>` | Port to bind to; 0 lets the OS assign a free port (default: 0) |
 | `--directory <DIR>` | Directory to serve files from. If not specified, a temporary directory will be created |
 | `--basic-test-credential <CREDENTIALS>` | Basic auth credentials in the form "username:password" |
-| `--data-file <PATH>` | Where to write the data file (default: ${HOME}/.local/share/rustup-mock-server.data) |
+| `--data-file <PATH>` | Where to write the data file (default: ${HOME}/.local/share/rustup-mock-server.data, or %LOCALAPPDATA%\rustup-mock-server.data on Windows) |
 
 ### Environment Variables
 
@@ -198,7 +200,7 @@ Basic usage:
 | `--addr <ADDR>` | Address to bind to (default: "127.0.0.1") |
 | `--port <PORT>` | Port to bind to; 0 lets the OS assign a free port (default: 0) |
 | `--basic-test-credential <CREDENTIALS>` | Basic auth credentials in the form "username:password" for the `Proxy-Authorization` header |
-| `--data-file <PATH>` | Where to write the data file (default: ${HOME}/.local/share/rustup-mock-proxy.data) |
+| `--data-file <PATH>` | Where to write the data file (default: ${HOME}/.local/share/rustup-mock-proxy.data, or %LOCALAPPDATA%\rustup-mock-proxy.data on Windows) |
 
 ### Using with rustup
 
