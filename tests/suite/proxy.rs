@@ -310,6 +310,10 @@ fn run_rustup_init(extra_env: &[(&str, &str)]) -> anyhow::Result<(tempfile::Temp
     // rustup-init prompt and abort. Skip the check, as the clitools test
     // infrastructure does (src/test/clitools.rs).
     cmd.env("RUSTUP_INIT_SKIP_PATH_CHECK", "yes");
+    // Likewise skip the MSVC check on Windows: it would prompt for a Visual
+    // C++ installation on machines without the MSVC build tools (see
+    // src/cli/self_update/windows.rs).
+    cmd.env("RUSTUP_INIT_SKIP_MSVC_CHECK", "yes");
     for (key, value) in extra_env {
         cmd.env(key, value);
     }
