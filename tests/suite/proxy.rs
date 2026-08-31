@@ -41,6 +41,8 @@ pub(crate) struct MockServer {
     log: PathBuf,
     child: Child,
     addr: SocketAddr,
+    // Only used from the `init_sh` tests, which do not run on Windows.
+    #[cfg_attr(windows, allow(dead_code))]
     directory: PathBuf,
 }
 
@@ -91,6 +93,7 @@ impl MockServer {
     }
 
     /// The directory the server is serving, from its data file.
+    #[cfg_attr(windows, allow(dead_code))]
     pub(crate) fn directory(&self) -> &Path {
         &self.directory
     }
