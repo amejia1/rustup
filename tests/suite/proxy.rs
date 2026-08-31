@@ -1,16 +1,12 @@
 //! Integration tests for `rustup-mock-server` and `rustup-mock-proxy`.
 //!
-//! This module is a Rust port of the `test-rustup-init.sh` shell script in
-//! the repository root. The shell script is kept for manual use by
-//! developers; this module runs the same scenarios as part of `cargo test
-//! --features test`.
-//!
 //! Each test boots a fresh mock dist server (and proxy where relevant) on an
 //! OS-assigned port, so the tests can run in parallel. The listening address
 //! of each program is read from its data file (see `rustup::test::MockDataFile`).
 
 #![cfg(feature = "test")]
 
+use std::collections::BTreeMap;
 use std::env::consts::EXE_SUFFIX;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -27,10 +23,10 @@ const MOCK_SERVER: &str = env!("CARGO_BIN_EXE_rustup-mock-server");
 const MOCK_PROXY: &str = env!("CARGO_BIN_EXE_rustup-mock-proxy");
 const RUSTUP_INIT: &str = env!("CARGO_BIN_EXE_rustup-init");
 
-const SERVER_USER: &str = "testuser";
-const SERVER_PASSWORD: &str = "testpass";
-const PROXY_USER: &str = "proxyuser";
-const PROXY_PASSWORD: &str = "proxypass";
+pub(crate) const SERVER_USER: &str = "testuser";
+pub(crate) const SERVER_PASSWORD: &str = "testpass";
+pub(crate) const PROXY_USER: &str = "proxyuser";
+pub(crate) const PROXY_PASSWORD: &str = "proxypass";
 const CHANNEL_MANIFEST: &str = "dist/channel-rust-stable.toml";
 
 /// A running `rustup-mock-server` serving a fresh mock dist tree.
@@ -38,22 +34,24 @@ const CHANNEL_MANIFEST: &str = "dist/channel-rust-stable.toml";
 /// The server populates its own temporary directory with the mock dist tree;
 /// the test's temp directory holds the server's log and data file. The server
 /// process is killed and its temp directory removed on drop.
-struct MockServer {
+pub(crate) struct MockServer {
     /// Keeps the temp dir (and the log and data file it holds) alive.
     #[allow(dead_code)]
     tmp: tempfile::TempDir,
     log: PathBuf,
     child: Child,
     addr: SocketAddr,
+    directory: PathBuf,
 }
 
 impl MockServer {
     /// Starts a server bound to an OS-assigned `127.0.0.1` port.
     ///
-    /// The listening address is read from the server's data file.
+    /// The server populates its own temporary directory with the mock dist
+    /// tree. The listening address is read from the server's data file.
     /// `credentials` is in `user:password` form, or `None` for a server that
     /// does not require authentication.
-    fn start(credentials: Option<&str>) -> Self {
+    pub(crate) fn start(credentials: Option<&str>) -> Self {
         let tmp = tempfile::Builder::new()
             .prefix("mock-server-")
             .tempdir()
@@ -67,23 +65,34 @@ impl MockServer {
             credentials,
             &log,
         );
-        let addr = wait_for_data_file(&data_file, Duration::from_secs(30)).unwrap_or_else(|e| {
+        let data = wait_for_data_file(&data_file, Duration::from_secs(30)).unwrap_or_else(|e| {
             kill(&mut child);
             dump_logs(&[&log]);
             panic!("mock server did not become ready: {e}");
         });
+        let addr = data_addr(&data);
+        let directory = data
+            .get("directory")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| panic!("mock server data file has no directory: {data:?}"));
 
         Self {
             tmp,
             log,
             child,
             addr,
+            directory,
         }
     }
 
     /// The root URL of the server, for `RUSTUP_DIST_SERVER`.
-    fn root_url(&self) -> String {
+    pub(crate) fn root_url(&self) -> String {
         format!("http://{}", self.addr)
+    }
+
+    /// The directory the server is serving, from its data file.
+    pub(crate) fn directory(&self) -> &Path {
+        &self.directory
     }
 
     /// The URL of `path` on the server.
@@ -101,7 +110,7 @@ impl Drop for MockServer {
 /// A running `rustup-mock-proxy` bound to an OS-assigned `127.0.0.1` port.
 ///
 /// The proxy process is killed and its temp directory removed on drop.
-struct MockProxy {
+pub(crate) struct MockProxy {
     /// Keeps the temp dir (and the log and data file it holds) alive.
     #[allow(dead_code)]
     tmp: tempfile::TempDir,
@@ -116,7 +125,7 @@ impl MockProxy {
     /// The listening address is read from the proxy's data file.
     /// `credentials` is in `user:password` form, or `None` to allow
     /// unauthenticated requests.
-    fn start(credentials: Option<&str>) -> Self {
+    pub(crate) fn start(credentials: Option<&str>) -> Self {
         let tmp = tempfile::Builder::new()
             .prefix("mock-proxy-")
             .tempdir()
@@ -130,11 +139,12 @@ impl MockProxy {
             credentials,
             &log,
         );
-        let addr = wait_for_data_file(&data_file, Duration::from_secs(30)).unwrap_or_else(|e| {
+        let data = wait_for_data_file(&data_file, Duration::from_secs(30)).unwrap_or_else(|e| {
             kill(&mut child);
             dump_logs(&[&log]);
             panic!("mock proxy did not become ready: {e}");
         });
+        let addr = data_addr(&data);
 
         Self {
             tmp,
@@ -145,7 +155,7 @@ impl MockProxy {
     }
 
     /// The proxy URL, for `http_proxy`/`https_proxy`.
-    fn root_url(&self) -> String {
+    pub(crate) fn root_url(&self) -> String {
         format!("http://{}", self.addr)
     }
 }
@@ -177,17 +187,17 @@ fn kill(child: &mut Child) {
 }
 
 /// Blocks until `path` holds a complete mock data file, returning the
-/// listening address it records, or times out.
+/// key/value pairs it records, or times out.
 ///
 /// Both mock programs write the data file after binding their listener, so a
 /// complete file means the service is ready.
-fn wait_for_data_file(path: &Path, timeout: Duration) -> anyhow::Result<SocketAddr> {
+fn wait_for_data_file(path: &Path, timeout: Duration) -> anyhow::Result<BTreeMap<String, String>> {
     let deadline = Instant::now() + timeout;
     loop {
         if let Ok(content) = fs::read_to_string(path) {
             let data = MockDataFile::parse(&content);
-            if let (Some(addr), Some(port)) = (data.get("addr"), data.get("port")) {
-                return Ok(format!("{addr}:{port}").parse()?);
+            if data.contains_key("addr") && data.contains_key("port") {
+                return Ok(data);
             }
         }
         anyhow::ensure!(
@@ -196,6 +206,17 @@ fn wait_for_data_file(path: &Path, timeout: Duration) -> anyhow::Result<SocketAd
         );
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+/// The listening address recorded in a complete mock data file.
+fn data_addr(data: &BTreeMap<String, String>) -> SocketAddr {
+    format!(
+        "{}:{}",
+        data.get("addr").expect("data file has an addr"),
+        data.get("port").expect("data file has a port")
+    )
+    .parse()
+    .expect("data file holds a valid address")
 }
 
 /// The result of a raw HTTP GET.
@@ -272,7 +293,7 @@ fn parse_url(url: &str) -> anyhow::Result<(String, u16, String)> {
 }
 
 /// Builds a `Basic` authorization header value for `user:password`.
-fn basic_auth(user: &str, password: &str) -> String {
+pub(crate) fn basic_auth(user: &str, password: &str) -> String {
     let encoded = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{password}"));
     format!("Basic {encoded}")
 }
@@ -404,9 +425,9 @@ fn expect_rustup_installed(home: &Path, output: &Output, logs: &[&PathBuf]) {
     }
 }
 
-// === test-rustup-init.sh, phase 1 (no authentication) ===
+// === No authentication ===
 
-/// `test-rustup-init.sh` test 1: the mock server serves dist files directly.
+/// The mock server serves dist files directly.
 #[test]
 fn mock_server_serves_dist_directly() {
     let server = MockServer::start(None);
@@ -414,7 +435,7 @@ fn mock_server_serves_dist_directly() {
     expect_response(&response, 200, Some("manifest-version"), &[&server.log]);
 }
 
-/// `test-rustup-init.sh` test 2: the proxy forwards requests to the mock server.
+/// The proxy forwards requests to the mock server.
 #[test]
 fn proxy_forwards_to_mock_server() {
     let server = MockServer::start(None);
@@ -433,8 +454,7 @@ fn proxy_forwards_to_mock_server() {
     );
 }
 
-/// `test-rustup-init.sh` test 3: `rustup-init` installs a toolchain straight from
-/// the mock server.
+/// `rustup-init` installs a toolchain straight from the mock server.
 #[test]
 fn rustup_init_installs_from_mock_server() {
     let server = MockServer::start(None);
@@ -448,8 +468,7 @@ fn rustup_init_installs_from_mock_server() {
     expect_rustup_installed(home.path(), &output, &[&server.log]);
 }
 
-/// `test-rustup-init.sh` test 4: `rustup-init` installs a toolchain through the
-/// proxy.
+/// `rustup-init` installs a toolchain through the proxy.
 #[test]
 fn rustup_init_installs_through_proxy() {
     let server = MockServer::start(None);
@@ -467,10 +486,9 @@ fn rustup_init_installs_through_proxy() {
     expect_rustup_installed(home.path(), &output, &[&proxy.log, &server.log]);
 }
 
-// === test-rustup-init.sh, phase 2 (basic authentication) ===
+// === Basic authentication ===
 
-/// `test-rustup-init.sh` test 7: unauthenticated requests to the mock
-/// server are rejected with 401.
+/// Unauthenticated requests to the mock server are rejected with 401.
 #[test]
 fn mock_server_rejects_unauthenticated_requests() {
     let server = MockServer::start(Some(&format!("{SERVER_USER}:{SERVER_PASSWORD}")));
@@ -478,8 +496,8 @@ fn mock_server_rejects_unauthenticated_requests() {
     expect_response(&response, 401, None, &[&server.log]);
 }
 
-/// `test-rustup-init.sh` test 8: the mock server serves dist files to
-/// clients presenting the right credentials.
+/// The mock server serves dist files to clients presenting the right
+/// credentials.
 #[test]
 fn mock_server_serves_authenticated_requests() {
     let server = MockServer::start(Some(&format!("{SERVER_USER}:{SERVER_PASSWORD}")));
@@ -493,8 +511,8 @@ fn mock_server_serves_authenticated_requests() {
     expect_response(&response, 200, Some("manifest-version"), &[&server.log]);
 }
 
-/// `test-rustup-init.sh` test 9: the proxy demands its own credentials
-/// even when the target's credentials are presented.
+/// The proxy demands its own credentials even when the target's credentials
+/// are presented.
 #[test]
 fn proxy_rejects_requests_without_proxy_auth() {
     let server = MockServer::start(Some(&format!("{SERVER_USER}:{SERVER_PASSWORD}")));
@@ -509,8 +527,8 @@ fn proxy_rejects_requests_without_proxy_auth() {
     expect_response(&response, 407, None, &[&proxy.log, &server.log]);
 }
 
-/// `test-rustup-init.sh` test 10: with both the proxy and the target
-/// authenticated, the proxy forwards the request.
+/// With both the proxy and the target authenticated, the proxy forwards the
+/// request.
 #[test]
 fn proxy_forwards_fully_authenticated_requests() {
     let server = MockServer::start(Some(&format!("{SERVER_USER}:{SERVER_PASSWORD}")));
@@ -534,9 +552,8 @@ fn proxy_forwards_fully_authenticated_requests() {
     );
 }
 
-/// `test-rustup-init.sh` test 11: `rustup-init` installs a toolchain from
-/// an authenticated mock server, presenting its credentials via
-/// `RUSTUP_AUTHORIZATION_HEADER`.
+/// `rustup-init` installs a toolchain from an authenticated mock server,
+/// presenting its credentials via `RUSTUP_AUTHORIZATION_HEADER`.
 #[test]
 fn rustup_init_installs_from_authenticated_mock_server() {
     let server = MockServer::start(Some(&format!("{SERVER_USER}:{SERVER_PASSWORD}")));
@@ -552,10 +569,9 @@ fn rustup_init_installs_from_authenticated_mock_server() {
     expect_rustup_installed(home.path(), &output, &[&server.log]);
 }
 
-/// `test-rustup-init.sh` test 12: `rustup-init` installs a toolchain
-/// through an authenticated proxy, presenting both the target credentials
-/// (`RUSTUP_AUTHORIZATION_HEADER`) and the proxy credentials
-/// (`RUSTUP_PROXY_AUTHORIZATION_HEADER`).
+/// `rustup-init` installs a toolchain through an authenticated proxy,
+/// presenting both the target credentials (`RUSTUP_AUTHORIZATION_HEADER`)
+/// and the proxy credentials (`RUSTUP_PROXY_AUTHORIZATION_HEADER`).
 #[test]
 fn rustup_init_installs_through_authenticated_proxy() {
     let server = MockServer::start(Some(&format!("{SERVER_USER}:{SERVER_PASSWORD}")));

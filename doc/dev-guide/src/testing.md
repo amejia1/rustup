@@ -4,13 +4,14 @@ This guide explains how to test rustup features, including the mock distribution
 and proxy server for testing the `RUSTUP_AUTHORIZATION_HEADER` and
 `RUSTUP_PROXY_AUTHORIZATION_HEADER` environment variables.
 
-## Test Scripts
+## Test Suite
 
-`test-rustup-init.sh` in the repository root is the test suite for the
-`rustup-init.sh` script. It starts `rustup-mock-server` and
+The integration tests in `tests/suite/proxy.rs` and
+`tests/suite/init_sh.rs` are the test suite for the `rustup-init` binary
+and the `rustup-init.sh` script. They start `rustup-mock-server` and
 `rustup-mock-proxy` on OS-assigned ports (discovered through their data
 files), first without authentication and then with basic authentication, and
-verifies:
+verify:
 
 - that the distribution server is reachable directly and through the proxy,
 - that unauthenticated requests are rejected (401 from the server, 407 from
@@ -21,25 +22,18 @@ verifies:
 - that the `rustup-init.sh` script can install a toolchain, forcing the use
   of `curl` or of `wget` by running it with a restricted `PATH`.
 
-Run it from the repository root:
-
-```bash
-./test-rustup-init.sh
-```
-
-Like `rustup-init.sh` itself, the script is plain POSIX sh and runs under the
-`/bin/sh` implementations that `rustup-init.sh` supports. It builds the test
-programs (with the `test` feature) if needed, uses OS-assigned localhost
-ports (read from the data files the mock programs write), and cleans up its
-processes and temporary directories on exit.
-
-The same scenarios are covered by the integration tests in `tests/suite/proxy.rs`,
-which run the mock server and proxy on OS-assigned ports, discovered through
-their data files, so they can run in parallel:
+The tests run in parallel (each test uses its own server and proxy on
+OS-assigned localhost ports) and can be run individually:
 
 ```bash
 cargo test --features test --test test_bonanza proxy::
+cargo test --features test --test test_bonanza init_sh::
 ```
+
+The `rustup-init.sh` tests run only on Unix: on Windows,
+`rustup-init.exe` is downloaded and run directly, so the script is not used
+there (see the [installation documentation](https://rust-lang.github.io/rustup/installation/other.html)).
+They also require `sh`, `curl`, and `wget` in `PATH`.
 
 ## Building the Test Programs
 
