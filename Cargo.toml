@@ -2,9 +2,6 @@
 name = "rustup"
 version = "1.30.0"
 edition = "2024"
-# `cargo run` without `--bin` runs the main binary, as it did before the
-# `rustup-mock-server` and `rustup-mock-proxy` binaries were added.
-default-run = "rustup-init"
 license = "MIT OR Apache-2.0"
 description = "Manage multiple rust installations with ease"
 homepage = "https://github.com/rust-lang/rustup"
@@ -46,7 +43,6 @@ test = ["dep:snapbox", "dep:walkdir", "clap-cargo/testing_colors"]
 anstream = "1"
 anstyle = "1.0.11"
 anyhow = "1.0.69"
-base64 = "0.22"
 cc = "1"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 clap = { version = "4", features = ["derive", "wrap_help", "string"] }
@@ -63,7 +59,7 @@ futures-util = "0.3.31"
 git-testament = "0.2"
 home = "0.5.4"
 http-body-util = "0.1.0"
-hyper = { version = "1.0", default-features = false, features = ["client", "http1", "server"] }
+hyper = { version = "1.0", default-features = false, features = ["server", "http1"] }
 hyper-util = { version = "0.1.1", features = ["tokio"] }
 indicatif = "0.18"
 itertools = "0.15"
@@ -97,7 +93,7 @@ tar = "0.4.26"
 tempfile = "3.8"
 thiserror = "2"
 threadpool = "1"
-tokio = { version = "1.26.0", default-features = false, features = ["macros", "rt-multi-thread", "signal", "sync"] }
+tokio = { version = "1.26.0", default-features = false, features = ["macros", "rt-multi-thread", "sync"] }
 tokio-retry = "0.3.0"
 tokio-stream = "0.1.14"
 toml = "1.0"
@@ -181,13 +177,3 @@ opt-level = 0
 [package.metadata.cargo-all-features]
 # Building with no web backend will error.
 always_include_features = ["reqwest-rustls-tls"]
-
-[[bin]]
-name = "rustup-mock-server"
-path = "src/bin/rustup-mock-server.rs"
-required-features = ["test"]
-
-[[bin]]
-name = "rustup-mock-proxy"
-path = "src/bin/rustup-mock-proxy.rs"
-required-features = ["test"]
