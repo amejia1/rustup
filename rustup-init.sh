@@ -657,10 +657,10 @@ ignore() {
     "$@"
 }
 
-# Returns success if $1 is an http:// URL that points at the local machine:
+# Succeeds if $1 is an http:// URL that points at the local machine:
 # the host must be `localhost`, an IPv4 loopback address (127.0.0.0/8), or
-# the IPv6 loopback address (`::1`). Such URLs may be downloaded over plain
-# HTTP; every other URL must use https.
+# the IPv6 loopback address (`::1`). The resource at such a URL may be
+# fetched over plain HTTP; every other URL must use https.
 is_local_http_url() {
     local _url="$1"
     case "$_url" in
@@ -696,11 +696,12 @@ is_local_http_url() {
 # This wraps curl or wget. Try curl first, if not installed,
 # use wget instead.
 #
-# If RUSTUP_AUTHORIZATION_HEADER is set it is sent as the value of the
-# `Authorization` header, and if RUSTUP_PROXY_AUTHORIZATION_HEADER is set it
-# is sent as the value of the `Proxy-Authorization` header (to the proxy).
-# http:// URLs pointing at the local machine (see is_local_http_url) are
-# downloaded over plain HTTP; every other URL enforces https.
+# If RUSTUP_AUTHORIZATION_HEADER is set, it is sent as the value of the
+# `Authorization` header, and if RUSTUP_PROXY_AUTHORIZATION_HEADER is set,
+# it is sent as the value of the `Proxy-Authorization` header (to the
+# proxy). The resource at an http:// URL that points at the local machine
+# (see is_local_http_url) is fetched over plain HTTP; every other URL
+# requires https.
 downloader() {
     # zsh does not split words by default, Required for curl retry arguments below.
     is_zsh && setopt local_options shwordsplit
@@ -748,14 +749,15 @@ downloader() {
 
     if [ "$_dld" = curl ]; then
         # Build the complete list of curl arguments in the positional
-        # parameters; some values (cipher suites, header values) contain
-        # spaces and cannot be carried through a single variable in POSIX sh.
+        # parameters. POSIX sh has no arrays, and some values (cipher
+        # suites, header values) contain spaces, which would be split
+        # apart if carried in a single variable.
         check_curl_for_retry_support
         _retry="$RETVAL"
         # shellcheck disable=SC2086  # _retry is intentionally split into words
         set -- $_retry
         if is_local_http_url "$_url"; then
-            # Plain HTTP to the local machine: no TLS enforcement needed.
+            # Plain HTTP to the local machine: no TLS enforcement is needed.
             :
         else
             get_ciphersuites_for_curl
@@ -792,9 +794,9 @@ downloader() {
         # Build the complete list of wget arguments in the positional
         # parameters (see the curl branch above for why).
         #
-        # wget has no option to send headers only to the proxy, so
-        # Proxy-Authorization is added with --header as well; it is included
-        # in the request the proxy receives.
+        # wget has no option to send headers only to the proxy, so the
+        # Proxy-Authorization header is added with --header as well; it is
+        # included in the request that the proxy receives.
         local _has_headers
         _has_headers=no
         set --
@@ -818,7 +820,7 @@ downloader() {
             get_ciphersuites_for_wget
             _ciphersuites="$RETVAL"
             if is_local_http_url "$_url"; then
-                # Plain HTTP to the local machine: no TLS enforcement needed.
+                # Plain HTTP to the local machine: no TLS enforcement is needed.
                 _err=$(wget "$@" "$_url" -O "$_output" 2>&1)
                 _status=$?
             elif [ -n "$_ciphersuites" ]; then

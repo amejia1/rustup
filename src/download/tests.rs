@@ -179,8 +179,9 @@ mod reqwest {
         let tmpdir = tmp_dir();
         let target_path = tmpdir.path().join("downloaded");
 
-        // Bearer token: ghp_1234567890abcdef is a typical format for GitHub Personal Access Tokens,
-        // which are commonly used as Bearer tokens in CI/CD environments.
+        // Bearer token: ghp_1234567890abcdef follows the typical format of
+        // a GitHub Personal Access Token, which is commonly used as a
+        // Bearer token in CI/CD environments.
         let bearer_token = "Bearer ghp_1234567890abcdef";
         let addr = serve_file_with_header_verification(vec![("Authorization", bearer_token)]);
         let from_url = format!("http://{addr}").parse().unwrap();
@@ -211,10 +212,11 @@ mod reqwest {
         let tmpdir = tmp_dir();
         let target_path = tmpdir.path().join("downloaded");
 
-        // Basic auth value for username 'test' and password '123?45>6':
+        // Basic auth value for username 'test' and password '123?45>6'; the
+        // password contains special characters (? and >) that are common in
+        // real-world passwords.
         // Shell command: echo -n 'test:123?45>6' | base64
         // Result: dGVzdDoxMjM/NDU+Ng==
-        // The password contains special characters that are common in passwords (? and >).
         let basic_auth = "Basic dGVzdDoxMjM/NDU+Ng==";
         let addr = serve_file_with_header_verification(vec![("Proxy-Authorization", basic_auth)]);
         let from_url = format!("http://{addr}").parse().unwrap();
@@ -277,7 +279,7 @@ mod reqwest {
         let _guard = scrub_env().await;
         let tmpdir = tmp_dir();
         let target_path = tmpdir.path().join("downloaded");
-        // Use the standard serve_file which doesn't check for any headers
+        // Use the standard serve_file, which does not check for any headers
         let addr = serve_file(b"test content for no headers".to_vec(), false);
         let from_url = format!("http://{addr}").parse().unwrap();
 
@@ -468,7 +470,7 @@ fn serve_file_with_header_verification(headers: Vec<(&str, &str)>) -> SocketAddr
         rt.block_on(async {
             let listener = tokio::net::TcpListener::bind(addr)
                 .await
-                .expect("can not bind");
+                .expect("cannot bind");
             let local_addr = listener.local_addr().unwrap();
             addr_tx.send(local_addr).unwrap();
 
