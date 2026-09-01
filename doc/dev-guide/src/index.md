@@ -31,12 +31,6 @@ affecting any existing installation. Remember to keep those two environment vari
 set when running your compiled `rustup-init` or the toolchains it installs, but _unset_
 when rebuilding `rustup` itself.
 
-To develop entirely offline, without network access to the real distribution
-server, the `rustup-mock-server` program serves a mock distribution tree that
-rustup can install from. See the
-["Using with rustup" section of the testing documentation](testing.md#using-with-rustup)
-for an example.
-
 If you wish to install your new build to try out longer term in your home directory
 then you can run `cargo dev-install` which is an alias in `.cargo/config` which
 runs `cargo run -- --no-modify-path -y` to install your build into your homedir.

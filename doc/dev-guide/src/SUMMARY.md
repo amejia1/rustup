@@ -8,4 +8,3 @@
 - [Release process](release-process.md)
 - [Tips and tricks](tips-and-tricks.md)
 - [Tracing](tracing.md)
-- [Testing](testing.md)
