@@ -264,7 +264,7 @@ pub fn change_channel_date(dist_server: &Url, channel: &str, date: &str) {
 // A mock Rust v2 distribution server. Create it and run `write`
 // to write its structure to a directory.
 #[derive(Debug)]
-pub struct MockDistServer {
+pub(crate) struct MockDistServer {
     // The local path to the dist server root
     pub path: PathBuf,
     pub channels: Vec<MockChannel>,
@@ -272,7 +272,7 @@ pub struct MockDistServer {
 
 // A Rust distribution channel
 #[derive(Debug)]
-pub struct MockChannel {
+pub(crate) struct MockChannel {
     // e.g. "nightly"
     pub name: String,
     // YYYY-MM-DD
@@ -282,7 +282,7 @@ pub struct MockChannel {
 }
 
 impl MockChannel {
-    pub fn new(
+    pub(super) fn new(
         channel: &str,
         date: &str,
         version: &str,
@@ -533,7 +533,7 @@ impl MockChannelContent {
 }
 
 #[derive(Copy, Clone, Eq, PartialEq)]
-pub enum RlsStatus {
+pub(super) enum RlsStatus {
     Available,
     Renamed,
     Unavailable,
@@ -550,7 +550,7 @@ impl RlsStatus {
 
 // A single rust-installer package
 #[derive(Debug, Hash, Eq, PartialEq)]
-pub struct MockPackage {
+pub(crate) struct MockPackage {
     // rust, rustc, rust-std-$tuple, rust-doc, etc.
     pub name: &'static str,
     pub version: String,
@@ -558,7 +558,7 @@ pub struct MockPackage {
 }
 
 #[derive(Debug, Hash, Eq, PartialEq, Clone)]
-pub struct MockTargetedPackage {
+pub(crate) struct MockTargetedPackage {
     // Target tuple
     pub target: String,
     // Whether the file actually exists (could be due to build failure)
@@ -569,7 +569,7 @@ pub struct MockTargetedPackage {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
-pub struct MockComponent {
+pub(crate) struct MockComponent {
     pub name: String,
     pub target: String,
     pub is_extension: bool,
@@ -582,7 +582,7 @@ struct MockHashes {
     pub zst: Option<String>,
 }
 
-pub enum MockManifestVersion {
+pub(crate) enum MockManifestVersion {
     V1,
     V2,
 }

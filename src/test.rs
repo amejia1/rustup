@@ -2,8 +2,7 @@
     clippy::box_default,
     clippy::print_stdout,
     clippy::print_stderr,
-    clippy::dbg_macro,
-    unused_imports
+    clippy::dbg_macro
 )]
 //! Test support module; public to permit use from integration tests.
 
@@ -17,7 +16,7 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-#[cfg(any(test, feature = "test"))]
+#[cfg(test)]
 use anyhow::Result;
 use sha2::{Digest, Sha256};
 
@@ -37,12 +36,10 @@ pub use clitools::{
     Assert, CliTestContext, Config, ParkedChild, SanitizedOutput, Scenario, SelfUpdateTestContext,
     output_release_file, print_command, print_indented,
 };
-pub mod dist;
+pub(super) mod dist;
 pub use dist::DistContext;
-pub mod mock;
+pub(super) mod mock;
 pub use mock::{MockComponentBuilder, MockFile, MockInstallerBuilder};
-mod mock_data;
-pub use mock_data::MockDataFile;
 
 pub fn checkpoint_path(test_root: &Path, name: &str) -> PathBuf {
     test_root.join(format!("rustup-checkpoint-{name}"))
@@ -341,52 +338,3 @@ pub static MULTI_ARCH1: &str = "i686-unknown-linux-gnu";
 static MULTI_ARCH1: &str = "x86_64-unknown-linux-gnu";
 
 pub const CHECKPOINT_ENV: &str = "RUSTUP_TEST_CHECKPOINT";
-
-/// Create a mock distribution server directory structure at the specified path.
-/// This function is used by the rustup-mock-server binary to set up the server.
-#[cfg(feature = "test")]
-#[allow(unused_qualifications)]
-pub fn create_mock_dist_server(path: &Path) -> anyhow::Result<()> {
-    use dist::MockChannel;
-    use dist::{MockDistServer, MockManifestVersion};
-
-    let server = MockDistServer {
-        path: path.to_path_buf(),
-        channels: vec![MockChannel::new(
-            "stable",
-            "2025-01-01",
-            "1.30.0",
-            "hash-12345",
-            dist::RlsStatus::Available,
-            true,
-            false,
-        )],
-    };
-
-    server.write(&[MockManifestVersion::V2], false, true);
-    Ok(())
-}
-
-/// Resolves when the process receives a termination signal: SIGINT anywhere,
-/// plus SIGTERM on unix.
-///
-/// The mock programs select on this so they can remove their data file and
-/// exit cleanly.
-#[cfg(feature = "test")]
-pub async fn shutdown_signal() {
-    #[cfg(unix)]
-    {
-        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-            .expect("failed to register a SIGTERM handler");
-        tokio::select! {
-            _ = sigterm.recv() => tracing::info!("SIGTERM received"),
-            _ = tokio::signal::ctrl_c() => tracing::info!("SIGINT received"),
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        if tokio::signal::ctrl_c().await.is_err() {
-            tracing::error!("failed to listen for SIGINT");
-        }
-    }
-}
