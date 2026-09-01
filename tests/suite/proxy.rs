@@ -428,6 +428,104 @@ fn expect_rustup_installed(home: &Path, output: &Output, logs: &[&PathBuf]) {
     }
 }
 
+/// Runs the `rustup` program with `args` in `home`.
+///
+/// The `rustup-init` binary is a chimera that behaves as `rustup` when it is
+/// invoked under that name (doc/dev-guide/src/tips-and-tricks.md); since the
+/// binary on disk is still named `rustup-init`, the persona is forced through
+/// `RUSTUP_FORCE_ARG0`.
+///
+/// Variables that could leak in from the surrounding environment are removed
+/// first, then `extra_env` is applied. `CI` is set so that rustup's automatic
+/// self-update stays off (see `SelfUpdateMode::from_cfg`).
+fn run_rustup_in(home: &Path, args: &[&str], extra_env: &[(&str, &str)]) -> Output {
+    let mut cmd = Command::new(RUSTUP_INIT);
+    cmd.args(args);
+    for var in [
+        "http_proxy",
+        "https_proxy",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "all_proxy",
+        "ALL_PROXY",
+        "CI",
+        "RUSTUP_CI",
+        "RUSTUP_HOME",
+        "CARGO_HOME",
+        "RUSTUP_DIST_SERVER",
+        "RUSTUP_UPDATE_ROOT",
+        "RUSTUP_DIST_ROOT",
+        "RUSTUP_TOOLCHAIN",
+        "RUSTUP_DEFAULT_HOST_TUPLE",
+        "RUSTUP_AUTHORIZATION_HEADER",
+        "RUSTUP_PROXY_AUTHORIZATION_HEADER",
+        "RUSTUP_FORCE_ARG0",
+    ] {
+        cmd.env_remove(var);
+    }
+    cmd.env("RUSTUP_FORCE_ARG0", "rustup");
+    cmd.env("RUSTUP_HOME", home);
+    cmd.env("CARGO_HOME", home);
+    cmd.env("CI", "1");
+    for (key, value) in extra_env {
+        cmd.env(key, value);
+    }
+
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to run rustup")
+}
+
+/// Installs the `stable` toolchain with the `rustup` program against
+/// `dist_root` (through `proxy` when given) in a fresh `RUSTUP_HOME`/
+/// `CARGO_HOME`, and fails the test unless the install succeeded and the
+/// toolchain is listed. Dumps `logs` on failure.
+fn expect_toolchain_install(
+    dist_root: &str,
+    proxy: Option<&str>,
+    extra_env: &[(&str, &str)],
+    logs: &[&PathBuf],
+) {
+    let home = tempfile::Builder::new()
+        .prefix("rustup-home-")
+        .tempdir()
+        .unwrap();
+    let update_root = format!("{dist_root}/rustup");
+    let mut extra: Vec<(&str, &str)> = vec![
+        ("RUSTUP_DIST_SERVER", dist_root),
+        ("RUSTUP_UPDATE_ROOT", update_root.as_str()),
+    ];
+    if let Some(proxy) = proxy {
+        extra.push(("http_proxy", proxy));
+        extra.push(("https_proxy", proxy));
+    }
+    for (key, value) in extra_env {
+        extra.push((key, value));
+    }
+
+    let install = run_rustup_in(home.path(), &["toolchain", "install", "stable"], &extra);
+    let stdout = String::from_utf8_lossy(&install.stdout);
+    let stderr = String::from_utf8_lossy(&install.stderr);
+    if !install.status.success() {
+        dump_logs(logs);
+        panic!(
+            "rustup toolchain install exited with {}\n--- stdout ---\n{stdout}\n--- stderr ---\n{stderr}",
+            install.status
+        );
+    }
+
+    let list = run_rustup_in(home.path(), &["toolchain", "list"], &[]);
+    let list_stdout = String::from_utf8_lossy(&list.stdout);
+    if !list.status.success() || !list_stdout.contains("stable") {
+        dump_logs(logs);
+        panic!(
+            "stable toolchain was not installed\n--- install stdout ---\n{stdout}\n--- install stderr ---\n{stderr}\n--- toolchain list ---\n{list_stdout}"
+        );
+    }
+}
+
 // === No authentication ===
 
 /// The mock server serves dist files directly.
@@ -487,6 +585,26 @@ fn rustup_init_installs_through_proxy() {
     ])
     .expect("failed to spawn rustup-init");
     expect_rustup_installed(home.path(), &output, &[&proxy.log, &server.log]);
+}
+
+/// `rustup` installs a toolchain straight from the mock server.
+#[test]
+fn rustup_installs_toolchain_from_mock_server() {
+    let server = MockServer::start(None);
+    expect_toolchain_install(&server.root_url(), None, &[], &[&server.log]);
+}
+
+/// `rustup` installs a toolchain through the proxy.
+#[test]
+fn rustup_installs_toolchain_through_proxy() {
+    let server = MockServer::start(None);
+    let proxy = MockProxy::start(None);
+    expect_toolchain_install(
+        &server.root_url(),
+        Some(proxy.root_url().as_str()),
+        &[],
+        &[&proxy.log, &server.log],
+    );
 }
 
 // === Basic authentication ===
@@ -597,4 +715,41 @@ fn rustup_init_installs_through_authenticated_proxy() {
     ])
     .expect("failed to spawn rustup-init");
     expect_rustup_installed(home.path(), &output, &[&proxy.log, &server.log]);
+}
+
+/// `rustup` installs a toolchain from an authenticated mock server,
+/// presenting its credentials via `RUSTUP_AUTHORIZATION_HEADER`.
+#[test]
+fn rustup_installs_toolchain_from_authenticated_mock_server() {
+    let server = MockServer::start(Some(&format!("{SERVER_USER}:{SERVER_PASSWORD}")));
+    let authorization = basic_auth(SERVER_USER, SERVER_PASSWORD);
+    expect_toolchain_install(
+        &server.root_url(),
+        None,
+        &[("RUSTUP_AUTHORIZATION_HEADER", authorization.as_str())],
+        &[&server.log],
+    );
+}
+
+/// `rustup` installs a toolchain through an authenticated proxy, presenting
+/// both the target credentials (`RUSTUP_AUTHORIZATION_HEADER`) and the proxy
+/// credentials (`RUSTUP_PROXY_AUTHORIZATION_HEADER`).
+#[test]
+fn rustup_installs_toolchain_through_authenticated_proxy() {
+    let server = MockServer::start(Some(&format!("{SERVER_USER}:{SERVER_PASSWORD}")));
+    let proxy = MockProxy::start(Some(&format!("{PROXY_USER}:{PROXY_PASSWORD}")));
+    let authorization = basic_auth(SERVER_USER, SERVER_PASSWORD);
+    let proxy_authorization = basic_auth(PROXY_USER, PROXY_PASSWORD);
+    expect_toolchain_install(
+        &server.root_url(),
+        Some(proxy.root_url().as_str()),
+        &[
+            ("RUSTUP_AUTHORIZATION_HEADER", authorization.as_str()),
+            (
+                "RUSTUP_PROXY_AUTHORIZATION_HEADER",
+                proxy_authorization.as_str(),
+            ),
+        ],
+        &[&proxy.log, &server.log],
+    );
 }
